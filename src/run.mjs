@@ -1,7 +1,7 @@
 import {mkdir,writeFile,readFile,appendFile} from 'node:fs/promises';
 import path from 'node:path';import {collect,render,overall,safeUrl} from './report.mjs';import {upsert} from './comment.mjs';
 const out=process.env.QE_OUTPUT_DIR||'qe-atlas-report',phase=process.env.QE_PHASE||'single';
-const expected=(process.env.QE_EXPECTED||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+const expected=process.env.QE_EXPECTED||'';
 let report,deliveryError=false;
 const operational=message=>({schemaVersion:1,product:'Report delivery',version:'1',verdict:'error',headline:message,metrics:[],findings:[],runUrl:`https://github.com/${process.env.GITHUB_REPOSITORY||'DaveEliranAssistant/qe-atlas-report'}/actions/runs/${process.env.GITHUB_RUN_ID||'0'}`});
 try{
@@ -28,7 +28,7 @@ try{
    let number=Number(process.env.QE_PR_NUMBER||0);if(!number&&process.env.GITHUB_EVENT_PATH){const event=JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH,'utf8'));number=event.pull_request?.number||0;}
    if(!number||!process.env.GITHUB_TOKEN||!process.env.GITHUB_REPOSITORY)throw Error('Comment requested without PR number, repository or token');
    const request=async(method,route,body)=>{const response=await fetch(`https://api.github.com${route}`,{method,headers:{Authorization:`Bearer ${process.env.GITHUB_TOKEN}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},...(body?{body:JSON.stringify(body)}:{})});if(!response.ok)throw Error(`GitHub API ${response.status}`);return response.json();};
-   const result=await upsert({request,repository:process.env.GITHUB_REPOSITORY,number,body:markdown});if(process.env.GITHUB_OUTPUT)await appendFile(process.env.GITHUB_OUTPUT,`comment-url=${result.html_url}\n`);
+   const result=await upsert({api:(route,method,body)=>request(method,route,body),repo:process.env.GITHUB_REPOSITORY,pr:number,body:markdown});if(process.env.GITHUB_OUTPUT)await appendFile(process.env.GITHUB_OUTPUT,`comment-url=${result.html_url}\n`);
   }
  }
 }catch(error){console.error(`QE Atlas report infrastructure error: ${error.message}`);deliveryError=true;}
