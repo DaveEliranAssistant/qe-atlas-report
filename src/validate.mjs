@@ -1,0 +1,2 @@
+import {readFileSync} from 'node:fs';import {validate} from './report.mjs';
+let failed=false;for(const path of process.argv.slice(2)){try{const e=validate(JSON.parse(readFileSync(path,'utf8')));console.log(path+': '+(e.length?e.join('; '):'valid'));failed ||= e.length>0;}catch{console.error(path+': unreadable or invalid JSON');failed=true;}}if(process.argv.length<3)failed=true;process.exitCode=failed?1:0;

@@ -1,0 +1,75 @@
+name: QE Atlas Report
+description: One evidence-preserving view of every discovered QE product result
+inputs:
+  results:
+    description: Workspace-relative result globs, one per line; supports *, ** and ?
+    default: '**/qe-result*.json'
+  expected-files:
+    description: Expected paths/globs, one per line; missing matches are explicit errors
+    default: ''
+  mode:
+    description: report-only or enforce; enforce fails on product fail or error
+    default: report-only
+  comment:
+    description: Update the single bot PR comment; requires pull-requests write
+    default: 'true'
+  token:
+    description: Job token; never use a privileged PAT with untrusted inputs
+    default: ${{ github.token }}
+  pr-number:
+    description: PR number; defaults to the event PR
+    default: ${{ github.event.pull_request.number }}
+  output-dir:
+    description: Output directory (must not overlap input product files)
+    default: qe-atlas-report
+  artifact-name:
+    description: Uploaded bundle name
+    default: qe-atlas-report
+outputs:
+  verdict:
+    description: Overall pass, fail, warn or error
+    value: ${{ steps.report.outputs.verdict }}
+  exit-code:
+    description: Recorded enforcement code
+    value: ${{ steps.report.outputs.exit-code }}
+  comment-url:
+    description: Read-back PR comment URL
+    value: ${{ steps.report.outputs.comment-url }}
+  artifact-url:
+    description: Download URL of the report bundle
+    value: ${{ steps.artifact.outputs.artifact-url }}
+runs:
+  using: composite
+  steps:
+    - name: Validate, render and publish consolidated view
+      id: report
+      shell: bash
+      env:
+        QE_RESULTS: ${{ inputs.results }}
+        QE_EXPECTED: ${{ inputs.expected-files }}
+        QE_MODE: ${{ inputs.mode }}
+        QE_COMMENT: ${{ inputs.comment }}
+        QE_TOKEN: ${{ inputs.token }}
+        QE_PR_NUMBER: ${{ inputs.pr-number }}
+        QE_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: node "$GITHUB_ACTION_PATH/src/run.mjs"
+    - name: Upload consolidated report HTML, JSON and Markdown
+      if: always()
+      id: artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.output-dir }}/
+        if-no-files-found: error
+        retention-days: 14
+    - name: Apply configured enforcement after artifact upload
+      if: always()
+      shell: bash
+      env:
+        QE_EXIT: ${{ steps.report.outputs.exit-code }}
+      run: |
+        case "$QE_EXIT" in
+          0) exit 0 ;;
+          1) exit 1 ;;
+          *) exit 2 ;;
+        esac
