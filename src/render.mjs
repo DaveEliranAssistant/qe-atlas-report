@@ -1,0 +1,31 @@
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const md=s=>esc(s).replace(/([\\`*_{}\[\]()#+.!|~])/g,'\\$1').replace(/\r?\n/g,' ');
+const url=s=>s.replace(/\(/g,'%28').replace(/\)/g,'%29');
+const safe=s=>{try{const u=new URL(s);return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password&&!/[\s<>"'`]/.test(s);}catch{return false;}};
+const badge=v=>({'warn':'🟡 WARN','fail':'🔴 FAIL','error':'🔴 ERROR','pass':'🟢 PASS'}[v]);
+const change=f=>f.change||(/^(fixed|still-open):/.exec(f.title)?.[1])||'new';
+const groups=[['new','New'],['fixed','Fixed'],['still-open','Still open']];
+export function render(report,{downloadUrl='',htmlUrl='',targetLabel=''}={}){
+ if(downloadUrl&&!safe(downloadUrl)||htmlUrl&&!safe(htmlUrl))throw Error('Unsafe report link');
+ const rows=[],sections=[],mr=[],ms=[];
+ for(let i=0;i<report.results.length;i++){
+  const r=report.results[i],id=`product-${i+1}`,metrics=r.metrics.map(m=>`${m.label}: ${m.value}`).join('; '),title=`${r.product} — ${badge(r.verdict)}`;
+  const native=r.artifacts?.find(a=>safe(a.url))?.url;
+  const ordered=groups.flatMap(([key])=>r.findings.filter(f=>change(f)===key));
+  const shown=ordered.slice(0,10);
+  const mdFinding=f=>`- **${md(f.severity)}**: ${md(f.title.replace(/^(new|fixed|still-open): /,''))} — ${md(f.location)}${f.url&&safe(f.url)?` · [Reference](${url(f.url)})`:''}`;
+  const htmlFinding=f=>`<li><strong>${esc(f.severity)}</strong>: ${esc(f.title.replace(/^(new|fixed|still-open): /,''))} — <code>${esc(f.location)}</code>${f.url&&safe(f.url)?` · <a href="${esc(f.url)}">Reference</a>`:''}</li>`;
+  const compact=groups.map(([key,label])=>{const fs=shown.filter(f=>change(f)===key);if(!fs.length)return '';const body=fs.map(mdFinding).join('\n');return key==='still-open'?`<details>\n<summary>Still open (${fs.length} shown)</summary>\n\n${body}\n\n</details>`:`### ${label}\n\n${body}`;}).filter(Boolean).join('\n\n');
+  const full=groups.map(([key,label])=>{const fs=ordered.filter(f=>change(f)===key);if(!fs.length)return '';const body=`<ul>${fs.map(htmlFinding).join('')}</ul>`;return key==='still-open'?`<details class="change-group"><summary>Still open (${fs.length})</summary>${body}</details>`:`<h3>${label} (${fs.length})</h3>${body}`;}).join('');
+  rows.push(`<tr><th scope="row">${esc(r.product)}</th><td><strong class="verdict verdict-${r.verdict}">${esc(badge(r.verdict))}</strong></td><td>${esc(r.headline)}</td><td>${esc(metrics)}</td><td><a href="#${id}">Details for ${esc(r.product)}</a></td></tr>`);
+  sections.push(`<section id="${id}" aria-labelledby="${id}-title"><h2 id="${id}-title">${esc(title)}</h2><p>${esc(r.headline)}</p><p>Version: ${esc(r.version)} · <a href="${esc(r.runUrl)}">Source CI run</a>${native?` · <a href="${esc(native)}">Native report artifact</a>`:''}</p><ul>${r.metrics.map(m=>`<li>${esc(m.label)}: ${esc(m.value)}</li>`).join('')}</ul>${full||'<p>No listed findings. Product scope still applies.</p>'}${r.detailsMarkdown?`<details class="native-report"><summary>Full native report</summary><pre>${esc(r.detailsMarkdown)}</pre></details>`:''}</section>`);
+  mr.push(`| ${md(r.product)} | **${badge(r.verdict)}** | ${md(r.headline)} | ${md(metrics)} | ${native?`[Details](${url(native)})`:'Artifact unavailable'} |`);
+  ms.push(`## ${md(title)}\n\n${compact||'No listed findings.'}${ordered.length>10?`\n\n${ordered.length-10} more findings in the full report.`:''}\n\n${native?`[See full report](${url(native)}) · `:''}[Source CI run](${url(r.runUrl)})`);
+ }
+ const heading=`QE Atlas Report${targetLabel?' — '+targetLabel:''} — ${report.verdict.toUpperCase()}`;
+ const note='Verdicts are product-scoped, not certification or full compatibility. The comment shows at most 10 findings per product; full detail remains in HTML and native artifacts.';
+ const top=[htmlUrl?`[View HTML report](${url(htmlUrl)})`:'',downloadUrl?`[Download full HTML report](${url(downloadUrl)})`:''].filter(Boolean).join(' · ');
+ const markdown=`<!-- qe-atlas-report:v1 -->\n# ${md(heading)}\n\n${top?top+'\n\n':''}${report.hasErrors?'**Operational errors are present; evidence is incomplete.**\n\n':''}| Product | Verdict | Headline | Key metrics | Details |\n| --- | --- | --- | --- | --- |\n${mr.join('\n')}\n\n${note}\n\n${ms.join('\n\n')}\n`;
+ const html=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${esc(heading)}</title><style>body{font:16px/1.55 system-ui,sans-serif;color:#182433;background:#f4f6fa;margin:0}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:2rem}table{width:100%;min-width:940px;border-collapse:collapse;background:white}caption{text-align:left;font-weight:600;padding:12px 0}th,td{text-align:left;border:1px solid #a6b0be;padding:12px;vertical-align:top}th,td:nth-child(2){white-space:nowrap}a{color:#174ea6}section{background:white;border:1px solid #a6b0be;border-radius:8px;padding:18px;margin:20px 0}summary{font-weight:700;cursor:pointer}details{margin:14px 0}pre,code{white-space:pre-wrap;overflow-wrap:anywhere}pre{background:#edf1f7;padding:14px;font-size:.85rem}td{overflow-wrap:anywhere}.table-scroll{overflow-x:auto}.verdict{padding:4px 7px;border-radius:4px;white-space:nowrap}.verdict-warn{background:#fff0b3;color:#593900}.verdict-fail,.verdict-error{background:#ffe0e0;color:#8a1717}.verdict-pass{background:#dcf2df;color:#17552b}:focus-visible{outline:3px solid #174ea6;outline-offset:3px}</style></head><body><main><h1>${esc(heading)}</h1>${report.hasErrors?'<p><strong>Operational errors are present; evidence is incomplete.</strong></p>':''}<p>${note}</p><p>Scroll the table horizontally on narrow screens.</p><div class="table-scroll" role="region" aria-label="Product results" tabindex="0"><table><caption>All discovered product checks</caption><thead><tr><th scope="col">Product</th><th scope="col">Verdict</th><th scope="col">Headline</th><th scope="col">Key metrics</th><th scope="col">Details</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>${sections.join('')}</main></body></html>`;
+ return {html,markdown};
+}

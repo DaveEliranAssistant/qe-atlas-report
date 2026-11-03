@@ -1,75 +1,112 @@
 name: QE Atlas Report
-description: One evidence-preserving view of every discovered QE product result
+description: Discover versioned product results; upload full HTML and JSON, then update one compact comment and the job summary.
 inputs:
   results:
-    description: Workspace-relative result globs, one per line; supports *, ** and ?
+    description: Newline-separated globs relative to the workspace
     default: '**/qe-result*.json'
   expected-files:
-    description: Expected paths/globs, one per line; missing matches are explicit errors
+    description: Newline-separated required result paths; missing files are ERROR, not absent products
+    default: ''
+  artifact-links:
+    description: JSON map of result-file paths to native artifact URLs from upload-artifact outputs
+    default: '{}'
+  require-artifact-links:
+    description: Missing product artifact URLs become visible operational errors
+    default: 'false'
+  html-url:
+    description: Optional browser-viewable preview URL; publishing is a separate explicitly enabled, fork-safe job
+    default: ''
+  target-label:
+    description: Application name in consolidated report title
     default: ''
   mode:
-    description: report-only or enforce; enforce fails on product fail or error
+    description: report-only or enforce; original product verdicts remain visible in both
     default: report-only
+  fail-on-warn:
+    description: In enforce mode, also fail on overall WARN; ignored in report-only mode
+    default: 'false'
   comment:
-    description: Update the single bot PR comment; requires pull-requests write
+    description: Post or update this Action's bot-owned marker comment
     default: 'true'
   token:
-    description: Job token; never use a privileged PAT with untrusted inputs
+    description: GitHub token with pull-requests write when commenting
     default: ${{ github.token }}
   pr-number:
-    description: PR number; defaults to the event PR
-    default: ${{ github.event.pull_request.number }}
+    description: Override PR number for a trusted workflow_dispatch
+    default: ''
   output-dir:
-    description: Output directory (must not overlap input product files)
+    description: Output directory relative to workspace
     default: qe-atlas-report
   artifact-name:
-    description: Uploaded bundle name
+    description: Combined HTML and JSON artifact name
     default: qe-atlas-report
 outputs:
   verdict:
-    description: Overall pass, fail, warn or error
-    value: ${{ steps.report.outputs.verdict }}
+    description: Overall verdict, not a replacement for individual product gates
+    value: ${{ steps.publish.outputs.verdict }}
   exit-code:
-    description: Recorded enforcement code
-    value: ${{ steps.report.outputs.exit-code }}
+    description: Configured enforcement or infrastructure-error exit code
+    value: ${{ steps.publish.outputs.exit-code }}
   comment-url:
-    description: Read-back PR comment URL
-    value: ${{ steps.report.outputs.comment-url }}
+    description: Created or updated comment URL
+    value: ${{ steps.publish.outputs.comment-url }}
   artifact-url:
-    description: Download URL of the report bundle
-    value: ${{ steps.artifact.outputs.artifact-url }}
+    description: Direct uploaded HTML and JSON bundle URL
+    value: ${{ steps.upload.outputs.artifact-url }}
+  html:
+    description: HTML report path
+    value: ${{ inputs.output-dir }}/report.html
 runs:
   using: composite
   steps:
-    - name: Validate, render and publish consolidated view
-      id: report
+    - name: Prepare full report with native artifact links
+      id: prepare
       shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/run.mjs"
       env:
+        QE_PHASE: prepare
         QE_RESULTS: ${{ inputs.results }}
         QE_EXPECTED: ${{ inputs.expected-files }}
-        QE_MODE: ${{ inputs.mode }}
-        QE_COMMENT: ${{ inputs.comment }}
-        QE_TOKEN: ${{ inputs.token }}
-        QE_PR_NUMBER: ${{ inputs.pr-number }}
+        QE_ARTIFACT_LINKS: ${{ inputs.artifact-links }}
+        QE_REQUIRE_ARTIFACT_LINKS: ${{ inputs.require-artifact-links }}
         QE_OUTPUT_DIR: ${{ inputs.output-dir }}
-      run: node "$GITHUB_ACTION_PATH/src/run.mjs"
-    - name: Upload consolidated report HTML, JSON and Markdown
+        QE_MODE: ${{ inputs.mode }}
+        QE_FAIL_ON_WARN: ${{ inputs.fail-on-warn }}
+        QE_TARGET_LABEL: ${{ inputs.target-label }}
+    - name: Upload full HTML and machine-readable results together
+      id: upload
       if: always()
-      id: artifact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ inputs.output-dir }}/
+        path: |
+          ${{ inputs.output-dir }}/report.html
+          ${{ inputs.output-dir }}/report.json
         if-no-files-found: error
         retention-days: 14
-    - name: Apply configured enforcement after artifact upload
+    - name: Publish compact comment and summary using actual upload URL
+      id: publish
       if: always()
       shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/run.mjs"
       env:
-        QE_EXIT: ${{ steps.report.outputs.exit-code }}
+        QE_PHASE: publish
+        QE_BUNDLE_URL: ${{ steps.upload.outputs.artifact-url }}
+        QE_HTML_URL: ${{ inputs.html-url }}
+        QE_TARGET_LABEL: ${{ inputs.target-label }}
+        QE_OUTPUT_DIR: ${{ inputs.output-dir }}
+        QE_MODE: ${{ inputs.mode }}
+        QE_FAIL_ON_WARN: ${{ inputs.fail-on-warn }}
+        QE_COMMENT: ${{ inputs.comment }}
+        QE_PR_NUMBER: ${{ inputs.pr-number }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+    - name: Apply configured report enforcement
+      if: always()
+      shell: bash
       run: |
-        case "$QE_EXIT" in
-          0) exit 0 ;;
-          1) exit 1 ;;
-          *) exit 2 ;;
+        case "$REPORT_EXIT_CODE" in
+          0|1|2) exit "$REPORT_EXIT_CODE" ;;
+          *) echo 'Reporter did not return a valid exit code'; exit 2 ;;
         esac
+      env:
+        REPORT_EXIT_CODE: ${{ steps.publish.outputs.exit-code }}

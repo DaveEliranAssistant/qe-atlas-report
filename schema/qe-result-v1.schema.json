@@ -97,6 +97,13 @@
             "format": "uri",
             "pattern": "^https?://[^\\s]+$",
             "maxLength": 2048
+          },
+          "change": {
+            "enum": [
+              "new",
+              "fixed",
+              "still-open"
+            ]
           }
         },
         "required": [

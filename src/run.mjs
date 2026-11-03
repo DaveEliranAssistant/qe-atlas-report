@@ -1,24 +1,39 @@
-import {mkdirSync,writeFileSync,readFileSync,existsSync,appendFileSync} from 'node:fs';import {resolve,join} from 'node:path';import {collect,render} from './report.mjs';import {upsert} from './comment.mjs';
-const env=process.env,out=resolve(env.QE_OUTPUT_DIR||'qe-atlas-report');
-const runUrl=`${env.GITHUB_SERVER_URL||'https://github.com'}/${env.GITHUB_REPOSITORY||'DaveEliranAssistant/qe-atlas-report'}/actions/runs/${env.GITHUB_RUN_ID||'0'}`;
-let report;try{report=collect({patterns:env.QE_RESULTS||'**/qe-result*.json',expected:env.QE_EXPECTED||'',runUrl});}catch{report={schemaVersion:1,verdict:'error',hasErrors:true,results:[{schemaVersion:1,product:'Report discovery',version:'1',verdict:'error',headline:'Invalid discovery configuration',metrics:[],findings:[],runUrl}]};}
-mkdirSync(out,{recursive:true});let {html,markdown}=render(report);
-writeFileSync(join(out,'report.html'),html);writeFileSync(join(out,'report.md'),markdown);writeFileSync(join(out,'report.json'),JSON.stringify(report,null,2)+'\n');
-let infrastructureError=false;
+import {mkdir,writeFile,readFile,appendFile} from 'node:fs/promises';
+import path from 'node:path';import {collect,render,overall,safeUrl} from './report.mjs';import {upsert} from './comment.mjs';
+const out=process.env.QE_OUTPUT_DIR||'qe-atlas-report',phase=process.env.QE_PHASE||'single';
+const expected=(process.env.QE_EXPECTED||'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+let report,deliveryError=false;
+const operational=message=>({schemaVersion:1,product:'Report delivery',version:'1',verdict:'error',headline:message,metrics:[],findings:[],runUrl:`https://github.com/${process.env.GITHUB_REPOSITORY||'DaveEliranAssistant/qe-atlas-report'}/actions/runs/${process.env.GITHUB_RUN_ID||'0'}`});
 try{
- if(env.QE_COMMENT==='true'){
-  if(!env.QE_PR_NUMBER)console.log('Comment skipped: event has no PR number.');else{
-   if(!env.QE_TOKEN)throw Error('Missing job token');
-   const api=async(path,method='GET',body)=>{const res=await fetch(`https://api.github.com${path}`,{method,headers:{Authorization:`Bearer ${env.QE_TOKEN}`,Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28'},body:body?JSON.stringify(body):undefined});if(!res.ok)throw Error(`GitHub report comment request failed (${res.status})`);return res.json();};
-   const comment=await upsert({api,repo:env.GITHUB_REPOSITORY,pr:env.QE_PR_NUMBER,body:markdown});
-   const readback=await api(`/repos/${env.GITHUB_REPOSITORY}/issues/comments/${comment.id}`);if(readback.body!==markdown)throw Error('Comment readback mismatch');
-   if(env.GITHUB_OUTPUT)appendFileSync(env.GITHUB_OUTPUT,`comment-url=${readback.html_url}\n`);
+ if(!['prepare','publish','single'].includes(phase))throw Error('Invalid phase');
+ if(phase==='publish')report=JSON.parse(await readFile(path.join(out,'report.json'),'utf8'));
+ else {
+  report=await collect({patterns:process.env.QE_RESULTS||'**/qe-result*.json',expected});
+  try{
+   const links=JSON.parse(process.env.QE_ARTIFACT_LINKS||'{}');if(!links||typeof links!=='object'||Array.isArray(links))throw Error('Invalid artifact-links map');
+   for(const r of report.results){const url=links[r.sourceFile];if(url){if(!safeUrl(url))throw Error('Unsafe native artifact URL');r.artifacts=[{label:'Native report',url},...(r.artifacts||[]).filter(a=>a.url!==url)];}else if(process.env.QE_REQUIRE_ARTIFACT_LINKS==='true'&&r.sourceFile)report.results.push(operational(`Missing native artifact link for ${r.product}`));}
+  }catch{report.results.push(operational('Invalid native artifact link configuration'));}
+  report.verdict=overall(report.results);report.hasErrors=report.results.some(r=>r.verdict==='error');
+ }
+ report.targetLabel=process.env.QE_TARGET_LABEL||report.targetLabel||'';
+ if(report.targetLabel.length>120||/[\r\n\x00-\x1f]/.test(report.targetLabel))throw Error('Invalid target label');
+ const downloadUrl=process.env.QE_BUNDLE_URL||'',htmlUrl=process.env.QE_HTML_URL||'';
+ if(phase==='publish'&&!safeUrl(downloadUrl))throw Error('Missing uploaded HTML artifact URL');
+ const {html,markdown}=render(report,{downloadUrl,htmlUrl,targetLabel:report.targetLabel});
+ await mkdir(out,{recursive:true});await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2)+'\n');await writeFile(path.join(out,'report.html'),html);await writeFile(path.join(out,'report.md'),markdown);
+ if(phase!=='prepare'){
+  if(process.env.GITHUB_STEP_SUMMARY){let previous='';try{previous=await readFile(process.env.GITHUB_STEP_SUMMARY,'utf8');}catch{}await writeFile(process.env.GITHUB_STEP_SUMMARY,markdown+'\n'+previous);}
+  const comment=process.env.QE_COMMENT==='true';
+  if(comment){
+   let number=Number(process.env.QE_PR_NUMBER||0);if(!number&&process.env.GITHUB_EVENT_PATH){const event=JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH,'utf8'));number=event.pull_request?.number||0;}
+   if(!number||!process.env.GITHUB_TOKEN||!process.env.GITHUB_REPOSITORY)throw Error('Comment requested without PR number, repository or token');
+   const request=async(method,route,body)=>{const response=await fetch(`https://api.github.com${route}`,{method,headers:{Authorization:`Bearer ${process.env.GITHUB_TOKEN}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},...(body?{body:JSON.stringify(body)}:{})});if(!response.ok)throw Error(`GitHub API ${response.status}`);return response.json();};
+   const result=await upsert({request,repository:process.env.GITHUB_REPOSITORY,number,body:markdown});if(process.env.GITHUB_OUTPUT)await appendFile(process.env.GITHUB_OUTPUT,`comment-url=${result.html_url}\n`);
   }
  }
-}catch(error){infrastructureError=true;console.error(error.message);markdown+='\n**Report delivery error:** '+error.message+'\n';}
-if(env.GITHUB_STEP_SUMMARY){const prior=existsSync(env.GITHUB_STEP_SUMMARY)?readFileSync(env.GITHUB_STEP_SUMMARY,'utf8'):'';writeFileSync(env.GITHUB_STEP_SUMMARY,markdown+'\n'+prior);}
-const mode=env.QE_MODE||'report-only';if(!['report-only','enforce'].includes(mode))infrastructureError=true;
-const exitCode=infrastructureError?2:mode==='enforce'?(report.hasErrors?2:report.verdict==='fail'?1:0):0;
-if(env.GITHUB_OUTPUT)appendFileSync(env.GITHUB_OUTPUT,`verdict=${report.verdict}\nexit-code=${exitCode}\noutput-dir=${out}\n`);
-console.log(`QE Atlas Report: ${report.verdict.toUpperCase()}, ${report.results.length} results, hasErrors=${report.hasErrors}`);
-// Composite uploads artifacts before applying the recorded exit code.
+}catch(error){console.error(`QE Atlas report infrastructure error: ${error.message}`);deliveryError=true;}
+const mode=process.env.QE_MODE||'report-only';
+if(!['report-only','enforce'].includes(mode)){console.error('Invalid mode');deliveryError=true;}
+const exitCode=deliveryError?2:mode==='enforce'?(report?.hasErrors?2:report?.verdict==='fail'||report?.verdict==='warn'&&process.env.QE_FAIL_ON_WARN==='true'?1:0):0;
+if(process.env.GITHUB_OUTPUT)await appendFile(process.env.GITHUB_OUTPUT,`verdict=${report?.verdict||'error'}\nexit-code=${exitCode}\n`);
+console.log(`QE Atlas Report: ${report?.verdict?.toUpperCase()||'ERROR'}, ${report?.results?.length||0} results, hasErrors=${report?.hasErrors||deliveryError}`);
