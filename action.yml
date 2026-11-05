@@ -1,0 +1,112 @@
+name: QE Atlas Report
+description: Discover versioned product results; upload full HTML and JSON, then update one compact comment and the job summary.
+inputs:
+  results:
+    description: Newline-separated globs relative to the workspace
+    default: '**/qe-result*.json'
+  expected-files:
+    description: Newline-separated required result paths; missing files are ERROR, not absent products
+    default: ''
+  artifact-links:
+    description: JSON map of result-file paths to native artifact URLs from upload-artifact outputs
+    default: '{}'
+  require-artifact-links:
+    description: Missing product artifact URLs become visible operational errors
+    default: 'false'
+  html-url:
+    description: Optional browser-viewable preview URL; publishing is a separate explicitly enabled, fork-safe job
+    default: ''
+  target-label:
+    description: Application name in consolidated report title
+    default: ''
+  mode:
+    description: report-only or enforce; original product verdicts remain visible in both
+    default: report-only
+  fail-on-warn:
+    description: In enforce mode, also fail on overall WARN; ignored in report-only mode
+    default: 'false'
+  comment:
+    description: Post or update this Action's bot-owned marker comment
+    default: 'true'
+  token:
+    description: GitHub token with pull-requests write when commenting
+    default: ${{ github.token }}
+  pr-number:
+    description: Override PR number for a trusted workflow_dispatch
+    default: ''
+  output-dir:
+    description: Output directory relative to workspace
+    default: qe-atlas-report
+  artifact-name:
+    description: Combined HTML and JSON artifact name
+    default: qe-atlas-report
+outputs:
+  verdict:
+    description: Overall verdict, not a replacement for individual product gates
+    value: ${{ steps.publish.outputs.verdict }}
+  exit-code:
+    description: Configured enforcement or infrastructure-error exit code
+    value: ${{ steps.publish.outputs.exit-code }}
+  comment-url:
+    description: Created or updated comment URL
+    value: ${{ steps.publish.outputs.comment-url }}
+  artifact-url:
+    description: Direct uploaded HTML and JSON bundle URL
+    value: ${{ steps.upload.outputs.artifact-url }}
+  html:
+    description: HTML report path
+    value: ${{ inputs.output-dir }}/report.html
+runs:
+  using: composite
+  steps:
+    - name: Prepare full report with native artifact links
+      id: prepare
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/run.mjs"
+      env:
+        QE_PHASE: prepare
+        QE_RESULTS: ${{ inputs.results }}
+        QE_EXPECTED: ${{ inputs.expected-files }}
+        QE_ARTIFACT_LINKS: ${{ inputs.artifact-links }}
+        QE_REQUIRE_ARTIFACT_LINKS: ${{ inputs.require-artifact-links }}
+        QE_OUTPUT_DIR: ${{ inputs.output-dir }}
+        QE_MODE: ${{ inputs.mode }}
+        QE_FAIL_ON_WARN: ${{ inputs.fail-on-warn }}
+        QE_TARGET_LABEL: ${{ inputs.target-label }}
+    - name: Upload full HTML and machine-readable results together
+      id: upload
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ inputs.output-dir }}/report.html
+          ${{ inputs.output-dir }}/report.json
+        if-no-files-found: error
+        retention-days: 14
+    - name: Publish compact comment and summary using actual upload URL
+      id: publish
+      if: always()
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/run.mjs"
+      env:
+        QE_PHASE: publish
+        QE_BUNDLE_URL: ${{ steps.upload.outputs.artifact-url }}
+        QE_HTML_URL: ${{ inputs.html-url }}
+        QE_TARGET_LABEL: ${{ inputs.target-label }}
+        QE_OUTPUT_DIR: ${{ inputs.output-dir }}
+        QE_MODE: ${{ inputs.mode }}
+        QE_FAIL_ON_WARN: ${{ inputs.fail-on-warn }}
+        QE_COMMENT: ${{ inputs.comment }}
+        QE_PR_NUMBER: ${{ inputs.pr-number }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+    - name: Apply configured report enforcement
+      if: always()
+      shell: bash
+      run: |
+        case "$REPORT_EXIT_CODE" in
+          0|1|2) exit "$REPORT_EXIT_CODE" ;;
+          *) echo 'Reporter did not return a valid exit code'; exit 2 ;;
+        esac
+      env:
+        REPORT_EXIT_CODE: ${{ steps.publish.outputs.exit-code }}

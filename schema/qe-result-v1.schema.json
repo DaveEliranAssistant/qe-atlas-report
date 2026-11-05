@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/DaveEliranAssistant/qe-atlas-report/blob/main/schema/qe-result-v1.schema.json",
+  "title": "QE Atlas product result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "product",
+    "version",
+    "verdict",
+    "headline",
+    "metrics",
+    "findings",
+    "runUrl"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "product": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "warn",
+        "error"
+      ]
+    },
+    "headline": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "metrics": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "value": {
+            "type": [
+              "string",
+              "number"
+            ],
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ]
+      }
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "location": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://[^\\s]+$",
+            "maxLength": 2048
+          },
+          "change": {
+            "enum": [
+              "new",
+              "fixed",
+              "still-open"
+            ]
+          }
+        },
+        "required": [
+          "severity",
+          "title",
+          "location"
+        ]
+      }
+    },
+    "detailsMarkdown": {
+      "type": "string",
+      "maxLength": 100000
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://[^\\s]+$",
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ]
+      }
+    },
+    "runUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://[^\\s]+$",
+      "maxLength": 2048
+    }
+  }
+}
